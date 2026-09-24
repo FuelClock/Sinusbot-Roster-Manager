@@ -15,6 +15,7 @@ registerPlugin({
         { name: 'TAVERNE_NAME', title: 'Taverne Command Name', type: 'string', default: 'taverne' },
         { name: 'ADDI_NAME', title: 'Add-Introduced Command Name (used as !<name>)', type: 'string', default: 'addi' },
         { name: 'LEADERSHIP_GROUP', title: 'Server Group ID (leadership)', type: 'string', default: '17' },
+        { name: 'NOTIFY_GROUPS', title: 'Server group IDs poked about unregistered rank holders (comma-separated)', type: 'string', default: '27,28' },
         { name: 'MEMBERSHIP_GROUPS', title: 'Membership server group IDs (comma-separated, assigned by assign)', type: 'string', default: '23' },
         { name: 'MESSAGEBOARD_ENABLED', title: 'Enable taverne messageboard', type: 'select', options: ['enabled', 'disabled'], default: 'enabled' },
         { name: 'MESSAGEBOARD_CHANNEL_ID', title: 'Channel for taverne messages (description)', type: 'channel' },
@@ -32,6 +33,7 @@ registerPlugin({
     var taverneName = String(config.TAVERNE_NAME || 'taverne');
     var addiName = String(config.ADDI_NAME || 'addi');
     var leadershipGroupId = String(config.LEADERSHIP_GROUP || '17');
+    var notifyGroupIds = String(config.NOTIFY_GROUPS || '27,28').split(',').map(function(s) { return String(s).trim(); }).filter(Boolean);
     var membershipGroupIds = String(config.MEMBERSHIP_GROUPS || '23').split(',').map(function(s) { return String(s).trim(); }).filter(Boolean);
     var messageboardEnabled = !(config.MESSAGEBOARD_ENABLED === 'disabled' || config.MESSAGEBOARD_ENABLED === 1);
     var messageboardChannelId = configuredId(config.MESSAGEBOARD_CHANNEL_ID);
@@ -454,6 +456,59 @@ registerPlugin({
         var matches = searchClients(String(name || ''), false, false, backend.getClients());
         return matches.length ? matches[0] : null;
     }
+
+    // ===== UNREGISTERED RANK HOLDER WATCH =====
+    // When someone with a rank server group connects but is not on the roster,
+    // poke the online leadership (NOTIFY_GROUPS, e.g. Admiraal/Founder) so
+    // they complete the roster with !roster add.
+    event.on('clientJoin', function(ev) {
+        var client = ev.client;
+        if (!client || client.isSelf()) {
+            return;
+        }
+        var name = client.name();
+        // Exact registration check only — a prefix hit ("John" vs "John Smith")
+        // is still a different player and must be reported.
+        var registered = false;
+        for (var i = 0; i < players.length; i++) {
+            if (equalsIgnoreCase(players[i].name, name)) {
+                registered = true;
+                break;
+            }
+        }
+        if (registered) {
+            return;
+        }
+
+        var rankIds = allRankGroupIds();
+        var hasRankGroup = false;
+        for (var r = 0; r < rankIds.length && !hasRankGroup; r++) {
+            hasRankGroup = isMemberOfOne(client, [rankIds[r]]);
+        }
+        if (!hasRankGroup) {
+            return;
+        }
+
+        var clients = backend.getClients() || [];
+        var poked = 0;
+        for (var c = 0; c < clients.length; c++) {
+            var target = clients[c];
+            var sameClient = (typeof target.equals === 'function' && target.equals(client)) ||
+                (typeof target.uid === 'function' && typeof client.uid === 'function' && String(target.uid()) === String(client.uid()));
+            if (target.isSelf() || sameClient) {
+                continue; // never poke the bot or the joining player
+            }
+            if (isMemberOfOne(target, notifyGroupIds)) {
+                try {
+                    target.poke('[RosterManager] ' + name + ' just connected with a rank group but is not on the roster. Use !roster add ' + name + ' to complete the roster.');
+                    poked++;
+                } catch (e) {
+                    logMessage('Failed to poke ' + target.name() + ' about unregistered rank holder: ' + e.message, 2);
+                }
+            }
+        }
+        logMessage('Unregistered rank holder ' + name + ' connected — notified ' + poked + ' leadership client(s).', 3);
+    });
 
     // ===== COMMAND HANDLING =====
     event.on('chat', function(ev) {
