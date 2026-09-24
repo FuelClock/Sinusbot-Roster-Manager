@@ -20,7 +20,11 @@ registerPlugin({
         { name: 'MESSAGEBOARD_ENABLED', title: 'Enable taverne messageboard', type: 'select', options: ['enabled', 'disabled'], default: 'enabled' },
         { name: 'MESSAGEBOARD_CHANNEL_ID', title: 'Channel for taverne messages (description)', type: 'channel' },
         { name: 'MAX_SHOWN_MESSAGES', title: 'Max taverne messages shown (newest at top)', type: 'number', default: 50 },
-        { name: 'MESSAGEBOARD_TITLE', title: 'Taverne title in the channel description', type: 'string', default: 'Guild Messages' }
+        { name: 'MESSAGEBOARD_TITLE', title: 'Taverne title in the channel description', type: 'string', default: 'Guild Messages' },
+        { name: 'LEADERSHIP_LOG_CHANNEL_ID', title: 'Channel for the leadership log (description)', type: 'channel' },
+        { name: 'LEADERSHIP_LOG_TITLE', title: 'Leadership log title in the channel description', type: 'string', default: 'Leadership Log' },
+        { name: 'LOG_MAX_SHOWN', title: 'Max leadership log entries shown (newest at top)', type: 'number', default: 20 },
+        { name: 'INACTIVE_DAYS', title: 'Days offline before a Matroos player is logged for demotion', type: 'number', default: 7 }
     ],
     requiredModules: ['engine', 'backend', 'event', 'store'],
     autorun: false
@@ -39,6 +43,10 @@ registerPlugin({
     var messageboardChannelId = configuredId(config.MESSAGEBOARD_CHANNEL_ID);
     var maxShownMessages = Math.max(1, parseInt(config.MAX_SHOWN_MESSAGES, 10) || 50);
     var messageboardTitle = String(config.MESSAGEBOARD_TITLE || 'Guild Messages');
+    var leadershipLogChannelId = configuredId(config.LEADERSHIP_LOG_CHANNEL_ID);
+    var leadershipLogTitle = String(config.LEADERSHIP_LOG_TITLE || 'Leadership Log');
+    var logMaxShown = Math.max(1, parseInt(config.LOG_MAX_SHOWN, 10) || 20);
+    var inactiveDays = Math.max(1, parseInt(config.INACTIVE_DAYS, 10) || 7);
 
     function configuredId(value) {
         if (!value) return '';
@@ -91,6 +99,8 @@ registerPlugin({
     // ===== PERSISTENCE =====
     var players = [];        // roster records
     var messages = [];       // taverne messages (oldest -> newest)
+    var lastOnline = {};     // name -> ISO timestamp of last known presence (GoudGraaier members)
+    var leadershipLog = [];  // leadership action log entries (oldest -> newest)
     var noteIdCounter = 0;   // global sequential note IDs
     var persistenceInitialized = false;
     var store = null;
@@ -277,12 +287,26 @@ registerPlugin({
         logMessage('Initializing roster manager system...');
         loadRanks();
         loadPersistedData();
+        // Everyone on the roster gets a fresh lastOnline baseline so nobody is
+        // flagged for inactivity the moment the tracking first starts.
+        var nowIso = new Date().toISOString();
+        for (var i = 0; i < players.length; i++) {
+            if (!lastOnline[players[i].name]) {
+                lastOnline[players[i].name] = nowIso;
+            }
+        }
         persistenceInitialized = true;
         if (messageboardEnabled) {
             updateTaverneDescription();
         }
+        if (leadershipLogChannelId) {
+            updateLeadershipLogDescription();
+        }
+        // Hourly inactivity check for Matroos players.
+        setInterval(checkInactivePlayers, 60 * 60 * 1000);
         logMessage('Initialization complete. Loaded ' + players.length + ' players, ' +
-            Object.keys(ranks).length + ' ranks, ' + messages.length + ' taverne messages');
+            Object.keys(ranks).length + ' ranks, ' + messages.length + ' taverne messages, ' +
+            leadershipLog.length + ' leadership log entries');
     }
 
     // ===== PERSISTENCE HELPERS =====
@@ -312,6 +336,8 @@ registerPlugin({
             store.set('rosterPlayers', JSON.stringify(players));
             store.set('taverneMessages', JSON.stringify(messages));
             store.set('rosterNoteCounter', String(noteIdCounter));
+            store.set('rosterLastOnline', JSON.stringify(lastOnline));
+            store.set('rosterLeadershipLog', JSON.stringify(leadershipLog));
         } catch (e) {
             logMessage('ERROR saving data: ' + e.message, 1);
         }
@@ -341,6 +367,16 @@ registerPlugin({
             if (rawMessages) {
                 var parsedMessages = JSON.parse(rawMessages);
                 messages = Array.isArray(parsedMessages) ? parsedMessages : [];
+            }
+            var rawLastOnline = store.get('rosterLastOnline');
+            if (rawLastOnline) {
+                var parsedLastOnline = JSON.parse(rawLastOnline);
+                lastOnline = (parsedLastOnline && typeof parsedLastOnline === 'object') ? parsedLastOnline : {};
+            }
+            var rawLog = store.get('rosterLeadershipLog');
+            if (rawLog) {
+                var parsedLog = JSON.parse(rawLog);
+                leadershipLog = Array.isArray(parsedLog) ? parsedLog : [];
             }
             var rawCounter = store.get('rosterNoteCounter');
             if (rawCounter) {
@@ -524,6 +560,14 @@ registerPlugin({
                 break;
             }
         }
+        if (registered) {
+            var rosterPlayer = findPlayer(name);
+            if (rosterPlayer) {
+                rosterPlayer.flagged = false; // online again — inactivity flag reset
+            }
+            lastOnline[name] = new Date().toISOString();
+            saveData();
+        }
         if (registered || !hasRankGroup) {
             return;
         }
@@ -547,6 +591,122 @@ registerPlugin({
             }
         }
         logMessage('Unregistered rank holder ' + name + ' connected — notified ' + poked + ' leadership client(s).', 3);
+    }
+
+    // ===== PRESENCE TRACKING & LEADERSHIP LOG =====
+    // Everyone with the membership (GoudGraaier) group gets their last known
+    // presence recorded on every move and on leave.
+    function trackPresence(client) {
+        if (!client || typeof client.isSelf === 'function' && client.isSelf()) {
+            return;
+        }
+        try {
+            if (isMemberOfOne(client, membershipGroupIds)) {
+                lastOnline[client.name()] = new Date().toISOString();
+            }
+        } catch (e) {
+            logMessage('trackPresence failed for ' + client.name() + ': ' + e.message, 2);
+        }
+    }
+
+    event.on('clientMove', function(ev) {
+        if (!ev.client || ev.client.isSelf()) {
+            return;
+        }
+        trackPresence(ev.client);
+    });
+
+    event.on('clientLeave', function(ev) {
+        if (!ev.client || ev.client.isSelf()) {
+            return;
+        }
+        trackPresence(ev.client);
+    });
+
+    // Rank a Matroos player who has not been seen for INACTIVE_DAYS so
+    // leadership can demote them ingame. Each player is logged once per
+    // inactivity period; coming online again clears the flag.
+    function checkInactivePlayers() {
+        var now = Date.now();
+        var cutoff = inactiveDays * 24 * 60 * 60 * 1000;
+        var logged = 0;
+        for (var i = 0; i < players.length; i++) {
+            var player = players[i];
+            if (player.rank !== DEFAULT_RANK || player.flagged) {
+                continue;
+            }
+            var lastIso = lastOnline[player.name];
+            if (!lastIso) {
+                lastOnline[player.name] = new Date(now).toISOString(); // fresh baseline
+                continue;
+            }
+            var last = Date.parse(lastIso);
+            if (isNaN(last)) {
+                lastOnline[player.name] = new Date(now).toISOString();
+                continue;
+            }
+            if (onlineClientByName(player.name)) {
+                lastOnline[player.name] = new Date(now).toISOString(); // actually online
+                continue;
+            }
+            var idleDays = Math.floor((now - last) / (24 * 60 * 60 * 1000));
+            if (now - last > cutoff) {
+                leadershipLog.push({
+                    text: player.name + ' (' + DEFAULT_RANK + ') has been offline for ' + idleDays + ' days — consider demoting this player ingame.',
+                    createdAt: new Date(now).toISOString()
+                });
+                player.flagged = true;
+                logged++;
+            }
+        }
+        if (logged || persistenceInitialized) {
+            saveData();
+        }
+        if (logged) {
+            updateLeadershipLogDescription();
+            logMessage('Leadership log: ' + logged + ' inactive Matroos player(s) logged.', 3);
+        }
+    }
+
+    function updateLeadershipLogDescription() {
+        if (!leadershipLogChannelId) {
+            return;
+        }
+        var channel = backend.getChannelByID(leadershipLogChannelId);
+        if (!channel) {
+            logMessage('Leadership log channel ' + leadershipLogChannelId + ' not found', 2);
+            return;
+        }
+        var shown = leadershipLog.slice(-logMaxShown).reverse(); // newest at top
+        var board = '';
+        if (!shown.length) {
+            board = '[center]Nothing to do[/center]';
+        } else {
+            for (var i = 0; i < shown.length; i++) {
+                var entry = shown[i];
+                board += '[b]' + formatDate(entry.createdAt) + '[/b]: ' + entry.text + '\n';
+            }
+            if (leadershipLog.length > shown.length) {
+                board += '... and ' + (leadershipLog.length - shown.length) + ' older entries';
+            }
+        }
+        var description = '[center][b][color=#FF8C00]' + leadershipLogTitle + '[/color][/b][/center]\n' + board;
+        try {
+            channel.setDescription(description);
+        } catch (e) {
+            logMessage('ERROR updating leadership log channel: ' + e.message, 1);
+        }
+    }
+
+    function handleLogClear(ev) {
+        var invoker = ev.client;
+        var count = leadershipLog.length;
+        leadershipLog = [];
+        if (persistenceInitialized) {
+            saveData();
+        }
+        updateLeadershipLogDescription();
+        invoker.chat('[RosterManager] Leadership log cleared (' + (count === 1 ? '1 entry' : count + ' entries') + ' removed).');
     }
 
     // ===== COMMAND HANDLING =====
@@ -735,6 +895,11 @@ registerPlugin({
                 return;
             }
             invoker.chat('Usage: !' + botName + ' note add <name> <text> | !' + botName + ' note delete <id>');
+            return;
+        }
+
+        if (subCommand === 'logclear') {
+            handleLogClear(ev);
             return;
         }
 
@@ -1109,6 +1274,7 @@ registerPlugin({
             p + ' note add <name> <text> - Append a note (leadership)\n' +
             p + ' notes <name> - List notes with IDs (leadership)\n' +
             p + ' note delete <id> - Delete a note by ID (leadership)\n' +
+            p + ' logclear - Clear the leadership log (leadership)\n' +
             t + ' <message> - Post a message to the taverne\n' +
             t + ' help - Taverne help\n' +
             t + ' clear - Clear all taverne messages (leadership)';
