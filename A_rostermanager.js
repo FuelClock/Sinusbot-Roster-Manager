@@ -462,29 +462,46 @@ registerPlugin({
     // poke the online leadership (NOTIFY_GROUPS, e.g. Admiraal/Founder) so
     // they complete the roster with !roster add.
     //
-    // IMPORTANT: at the instant of clientJoin the client's server group list
-    // is often NOT populated yet (TS3/SinusBot timing), so the check runs on
-    // a delay against a freshly resolved client. Rankless members get the
-    // default rank during the same delayed check.
+    // Server connects arrive as clientMove with fromChannel undefined
+    // (the archive plugins — WelcomeMessage, AFK Mover — use the same
+    // pattern; 'clientJoin' does not fire on this backend). The group list
+    // is also often not populated at the instant of the move, so the check
+    // runs on a delay against a freshly resolved client.
     var JOIN_CHECK_DELAY_MS = Math.max(0, parseFloat(config.JOIN_CHECK_DELAY, 10) * 1000) || 3000;
-    event.on('clientJoin', function(ev) {
-        var client = ev.client;
-        if (!client || client.isSelf()) {
+    event.on('clientMove', function(ev) {
+        if (typeof ev === 'undefined' || !ev.client || ev.client.isSelf()) {
             return;
         }
-        var name = client.name();
+        var fromChannel = ev.fromChannel;
+        if (!(fromChannel === undefined || fromChannel === null)) {
+            return; // internal channel move, not a server connect
+        }
+        var name = ev.client.name();
+        logMessage('Connect detected: ' + name + ' — check in ' + Math.round(JOIN_CHECK_DELAY_MS / 1000) + 's', 1);
         setTimeout(function() {
             checkConnectedClient(name);
         }, JOIN_CHECK_DELAY_MS);
     });
 
     function checkConnectedClient(name) {
-        // Re-resolve the client from the live list — the join snapshot may
+        // Re-resolve the client from the live list — the connect snapshot may
         // have empty/stale server group data. If they left again, skip.
         var client = onlineClientByName(name);
         if (!client) {
+            logMessage('Connect check: ' + name + ' left again — skipped', 1);
             return;
         }
+        var seenGroups = [];
+        try {
+            var rawGroups = client.getServerGroups() || [];
+            for (var g = 0; g < rawGroups.length; g++) {
+                seenGroups.push(String(rawGroups[g].id()));
+            }
+        } catch (e) {
+            logMessage('Connect check: could not read groups of ' + name + ': ' + e.message, 1);
+        }
+        logMessage('Connect check: ' + name + ' groups=[' + seenGroups.join(',') + ']', 1);
+
         var rankIds = allRankGroupIds();
         var hasRankGroup = false;
         for (var r = 0; r < rankIds.length && !hasRankGroup; r++) {
@@ -495,7 +512,7 @@ registerPlugin({
         var defaultRankId = ranks[DEFAULT_RANK];
         if (!hasRankGroup && defaultRankId && isMemberOfOne(client, membershipGroupIds)) {
             addToServerGroups(client, [defaultRankId]);
-            logMessage('Assigned default rank ' + DEFAULT_RANK + ' to rankless member ' + name + ' on connect.', 3);
+            logMessage('Assigned default rank ' + DEFAULT_RANK + ' to rankless member ' + name + ' on connect.', 1);
         }
 
         // Exact registration check only — a prefix hit ("John" vs "John Smith")
