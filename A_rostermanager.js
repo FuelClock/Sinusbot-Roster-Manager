@@ -656,16 +656,34 @@ registerPlugin({
         players.push(player);
 
         // If the player is already online on TeamSpeak, assign membership
-        // (GoudGraaier) and the default rank group right away. If not, they
-        // stay roster-only and get groups later via !roster assign.
+        // (GoudGraaier) right away. Matroos is only granted when the player
+        // holds NO other rank group yet — an existing rank is kept as-is and
+        // recorded. Offline players stay roster-only (!roster assign later).
         var assigned = false;
         var client = onlineClientByName(name);
         var defaultRankId = ranks[DEFAULT_RANK];
-        if (client && defaultRankId) {
+        if (client && membershipGroupIds.length) {
             addToServerGroups(client, membershipGroupIds);
-            addToServerGroups(client, [defaultRankId]);
-            player.rank = DEFAULT_RANK;
             assigned = true;
+            if (defaultRankId) {
+                var heldRankGroups = [];
+                var allRankIds = allRankGroupIds();
+                for (var ri = 0; ri < allRankIds.length; ri++) {
+                    if (isMemberOfOne(client, [allRankIds[ri]])) {
+                        heldRankGroups.push(allRankIds[ri]);
+                    }
+                }
+                if (heldRankGroups.length) {
+                    // Already carries a rank — keep it, just record it.
+                    var existingRank = findRankNameByGroupId(heldRankGroups[0]);
+                    if (existingRank) {
+                        player.rank = existingRank;
+                    }
+                } else {
+                    addToServerGroups(client, [defaultRankId]);
+                    player.rank = DEFAULT_RANK;
+                }
+            }
         }
 
         if (persistenceInitialized) {
