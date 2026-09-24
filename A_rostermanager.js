@@ -11,7 +11,7 @@ registerPlugin({
     description: 'Guild roster with intro tracking, ranks, leadership notes and taverne messageboard',
     backends: ['ts3'],
     vars: [
-        { name: 'BOT_NAME', title: 'Bot Command Name', type: 'string', default: 'roster' },
+        { name: 'BOT_NAME', title: 'Member Command Name (used as !<name>)', type: 'string', default: 'member' },
         { name: 'TAVERNE_NAME', title: 'Taverne Command Name', type: 'string', default: 'taverne' },
         { name: 'ADDI_NAME', title: 'Add-Introduced Command Name (used as !<name>)', type: 'string', default: 'addi' },
         { name: 'LEADERSHIP_GROUP', title: 'Server Group ID (leadership)', type: 'string', default: '17' },
@@ -33,7 +33,7 @@ registerPlugin({
     const backend = require('backend');
     const event = require('event');
 
-    var botName = String(config.BOT_NAME || 'roster');
+    var botName = String(config.BOT_NAME || 'member');
     var taverneName = String(config.TAVERNE_NAME || 'taverne');
     var addiName = String(config.ADDI_NAME || 'addi');
     var leadershipGroupId = String(config.LEADERSHIP_GROUP || '17');
@@ -55,7 +55,7 @@ registerPlugin({
         return String(value);
     }
 
-    // Ranks are fixed (seeded on first start, listed with !roster ranks) —
+    // Ranks are fixed (seeded on first start, listed with the ranks command) —
     // no add/remove commands, none are expected to be needed.
     var DEFAULT_RANKS = { Matroos: 25, Korporaal: 26, Sergeant: 30, Majoor: 31, Admiraal: 27, Founder: 28 };
     // Rank granted automatically when an online player is added to the roster.
@@ -496,7 +496,7 @@ registerPlugin({
     // ===== UNREGISTERED RANK HOLDER WATCH =====
     // When someone with a rank server group connects but is not on the roster,
     // poke the online leadership (NOTIFY_GROUPS, e.g. Admiraal/Founder) so
-    // they complete the roster with !roster add.
+    // they complete the roster with the add command.
     //
     // Server connects arrive as clientMove with fromChannel undefined
     // (the archive plugins — WelcomeMessage, AFK Mover — use the same
@@ -583,7 +583,7 @@ registerPlugin({
             }
             if (isMemberOfOne(target, notifyGroupIds)) {
                 try {
-                    target.poke('[RosterManager] ' + name + ' just connected with a rank group but is not on the roster. Use !roster add ' + name + ' to complete the roster.');
+                    target.poke('[RosterManager] ' + name + ' just connected with a rank group but is not on the roster. Use !' + botName + ' add ' + name + ' to complete the roster.');
                     poked++;
                 } catch (e) {
                     logMessage('Failed to poke ' + target.name() + ' about unregistered rank holder: ' + e.message, 2);
@@ -733,7 +733,7 @@ registerPlugin({
             return;
         }
 
-        // Roster commands: !roster <subcommand>
+        // Roster commands: !<botName> <subcommand>
         var prefix = '!' + botName + ' ';
         if (text.indexOf(prefix) === 0) {
             var cmdText = text.substring(prefix.length);
@@ -847,9 +847,9 @@ registerPlugin({
             return;
         }
 
-        if (subCommand === 'rankup') {
+        if (subCommand === 'setrank') {
             if (restParts.length < 2) {
-                invoker.chat('Usage: !' + botName + ' rankup <name> <rank>');
+                invoker.chat('Usage: !' + botName + ' setrank <name> <rank>');
                 return;
             }
             // Names may contain spaces and the rank is trailing, so match the
@@ -857,7 +857,7 @@ registerPlugin({
             var split = splitNameAndRank(rest);
             if (!split) {
                 var known = Object.keys(ranks).join(', ');
-                invoker.chat('[RosterManager] Could not find a rank at the end of the command' + (known ? ' — known ranks: ' + known : ' — no ranks configured') + '. Usage: !' + botName + ' rankup <name> <rank>');
+                invoker.chat('[RosterManager] Could not find a rank at the end of the command' + (known ? ' — known ranks: ' + known : ' — no ranks configured') + '. Usage: !' + botName + ' setrank <name> <rank>');
                 return;
             }
             handleRankup(split.name, split.rank, ev);
@@ -936,7 +936,7 @@ registerPlugin({
         // If the player is already online on TeamSpeak, assign membership
         // (GoudGraaier) right away. Matroos is only granted when the player
         // holds NO other rank group yet — an existing rank is kept as-is and
-        // recorded. Offline players stay roster-only (!roster assign later).
+        // recorded. Offline players stay roster-only (assign later).
         var assigned = false;
         var client = onlineClientByName(name);
         var defaultRankId = ranks[DEFAULT_RANK];
@@ -1000,7 +1000,7 @@ registerPlugin({
 
         // Strip membership (GoudGraaier) and any rank server group while the
         // player is online. Offline players keep their groups — the next
-        // assign/rankup will not apply, so leadership strips manually or
+        // assign/setrank will not apply, so leadership strips manually or
         // re-adds and removes them while online.
         var stripped = false;
         var client = onlineClientByName(player.name);
@@ -1055,14 +1055,14 @@ registerPlugin({
     }
 
     // "John Smith Korporaal" -> { name: "John Smith", rank: "Korporaal" }
-    // by finding the longest trailing token sequence that is a configured rank.
+    // by finding the longest trailing token sequence that is a configured rank. (!member setrank)
     function splitNameAndRank(text) {
         var tokens = String(text || '').trim().split(/\s+/);
         for (var take = 1; take < tokens.length; take++) {
             var rankCandidate = tokens.slice(tokens.length - take).join(' ');
             var nameCandidate = tokens.slice(0, tokens.length - take).join(' ');
             if (!nameCandidate) {
-                continue; // "!roster rankup Korporaal" has no player name — usage error
+                continue; // "!member setrank Korporaal" has no player name — usage error
             }
             // Exact rank name first; then case-insensitive compare.
             if (ranks.hasOwnProperty(rankCandidate)) {
@@ -1120,7 +1120,7 @@ registerPlugin({
             saveData();
         }
 
-        invoker.chat('[RosterManager] ' + player.name + ' rankup: old rank(s) removed, now ' + rankName + '.');
+        invoker.chat('[RosterManager] ' + player.name + ' setrank: old rank(s) removed, now ' + rankName + '.');
     }
 
     function handleMatch(partial, ev) {
@@ -1268,7 +1268,7 @@ registerPlugin({
             p + ' info <name> - Player details (leadership)\n' +
             p + ' remove <name> - Remove player (leadership)\n' +
             p + ' assign <name> - Assign server groups (player must be online)\n' +
-            p + ' rankup <name> <rank> - Give a new rank (player must be online)\n' +
+            p + ' setrank <name> <rank> - Give a new rank (player must be online)\n' +
             p + ' match <partial> - Match closest online client\n' +
             p + ' ranks - Show configured ranks\n' +
             p + ' note add <name> <text> - Append a note (leadership)\n' +
