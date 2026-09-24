@@ -13,6 +13,7 @@ registerPlugin({
     vars: [
         { name: 'BOT_NAME', title: 'Bot Command Name', type: 'string', default: 'roster' },
         { name: 'TAVERNE_NAME', title: 'Taverne Command Name', type: 'string', default: 'taverne' },
+        { name: 'ADDI_NAME', title: 'Add-Introduced Command Name (used as !<name>)', type: 'string', default: 'addi' },
         { name: 'LEADERSHIP_GROUP', title: 'Server Group ID (leadership)', type: 'string', default: '17' },
         { name: 'MEMBERSHIP_GROUPS', title: 'Membership server group IDs (comma-separated, assigned by assign)', type: 'string', default: '23' },
         { name: 'MESSAGEBOARD_ENABLED', title: 'Enable taverne messageboard', type: 'select', options: ['enabled', 'disabled'], default: 'enabled' },
@@ -29,6 +30,7 @@ registerPlugin({
 
     var botName = String(config.BOT_NAME || 'roster');
     var taverneName = String(config.TAVERNE_NAME || 'taverne');
+    var addiName = String(config.ADDI_NAME || 'addi');
     var leadershipGroupId = String(config.LEADERSHIP_GROUP || '17');
     var membershipGroupIds = String(config.MEMBERSHIP_GROUPS || '23').split(',').map(function(s) { return String(s).trim(); }).filter(Boolean);
     var messageboardEnabled = !(config.MESSAGEBOARD_ENABLED === 'disabled' || config.MESSAGEBOARD_ENABLED === 1);
@@ -469,6 +471,14 @@ registerPlugin({
             return;
         }
 
+        // !addi <name>: shortcut for add + introduced
+        var addiPrefix = '!' + addiName + ' ';
+        if (text === '!' + addiName || text.indexOf(addiPrefix) === 0) {
+            var addiArgs = text === '!' + addiName ? '' : text.substring(addiPrefix.length);
+            handleRosterCommand('addintroduced ' + addiArgs, ev);
+            return;
+        }
+
         // Roster commands: !roster <subcommand>
         var prefix = '!' + botName + ' ';
         if (text.indexOf(prefix) === 0) {
@@ -525,7 +535,7 @@ registerPlugin({
 
         if (subCommand === 'addintroduced') {
             if (!rest) {
-                invoker.chat('Usage: !' + botName + ' addintroduced <name>');
+                invoker.chat('Usage: !' + addiName + ' <name>');
                 return;
             }
             addPlayer(rest, 'introduced', ev);
@@ -992,7 +1002,7 @@ registerPlugin({
         var helpMsg = '[RosterManager] COMMANDS:\n' +
             p + ' help - Show this help message\n' +
             p + ' add <name> - Add player; auto-assigns groups if online (leadership)\n' +
-            p + ' addintroduced <name> - Same as add, but marks them introduced (leadership)\n' +
+            '!addi <name> - Add player and mark introduced in one step (leadership)\n' +
             p + ' introduced <name> - Mark introduced (leadership)\n' +
             p + ' pending - Players awaiting intro (leadership)\n' +
             p + ' status - Show full roster (leadership)\n' +
