@@ -46,6 +46,8 @@ registerPlugin({
     // Ranks are fixed (seeded on first start, listed with !roster ranks) —
     // no add/remove commands, none are expected to be needed.
     var DEFAULT_RANKS = { Matroos: 25, Korporaal: 26, Sergeant: 30, Majoor: 31, Admiraal: 27, Founder: 28 };
+    // Rank granted automatically when an online player is added to the roster.
+    var DEFAULT_RANK = 'Matroos';
 
     function loadRanks() {
         var raw = store ? store.get('rosterRanks') : null;
@@ -652,10 +654,25 @@ registerPlugin({
             createdAt: new Date().toISOString()
         };
         players.push(player);
+
+        // If the player is already online on TeamSpeak, assign membership
+        // (GoudGraaier) and the default rank group right away. If not, they
+        // stay roster-only and get groups later via !roster assign.
+        var assigned = false;
+        var client = onlineClientByName(name);
+        var defaultRankId = ranks[DEFAULT_RANK];
+        if (client && defaultRankId) {
+            addToServerGroups(client, membershipGroupIds);
+            addToServerGroups(client, [defaultRankId]);
+            player.rank = DEFAULT_RANK;
+            assigned = true;
+        }
+
         if (persistenceInitialized) {
             saveData();
         }
-        invoker.chat('[RosterManager] Added ' + name + '. Introduction status: pending.');
+        invoker.chat('[RosterManager] Added ' + name + '. Introduction status: pending.' +
+            (assigned ? ' Player is online — assigned ' + DEFAULT_RANK + ' + membership groups.' : ''));
         logMessage('Player added: ' + name + ' by ' + invoker.name(), 3);
     }
 
@@ -947,7 +964,7 @@ registerPlugin({
 
         var helpMsg = '[RosterManager] COMMANDS:\n' +
             p + ' help - Show this help message\n' +
-            p + ' add <name> - Add player (leadership)\n' +
+            p + ' add <name> - Add player; auto-assigns groups if online (leadership)\n' +
             p + ' introduced <name> - Mark introduced (leadership)\n' +
             p + ' pending - Players awaiting intro (leadership)\n' +
             p + ' status - Show full roster (leadership)\n' +
