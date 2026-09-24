@@ -810,7 +810,7 @@ registerPlugin({
             return;
         }
 
-        if (subCommand === 'status') {
+        if (subCommand === 'status' || subCommand === 'list') {
             displayRosterStatus(ev);
             return;
         }
@@ -1264,7 +1264,7 @@ registerPlugin({
             '!addi <name> - Add player and mark introduced in one step (leadership)\n' +
             p + ' introduced <name> - Mark introduced (leadership)\n' +
             p + ' pending - Players awaiting intro (leadership)\n' +
-            p + ' status - Show full roster (leadership)\n' +
+            p + ' status|list - Show full roster (leadership)\n' +
             p + ' info <name> - Player details (leadership)\n' +
             p + ' remove <name> - Remove player (leadership)\n' +
             p + ' assign <name> - Assign server groups (player must be online)\n' +
