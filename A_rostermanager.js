@@ -519,7 +519,16 @@ registerPlugin({
                 invoker.chat('Usage: !' + botName + ' add <name>');
                 return;
             }
-            handleAddPlayer(rest, ev);
+            addPlayer(rest, 'pending', ev);
+            return;
+        }
+
+        if (subCommand === 'addintroduced') {
+            if (!rest) {
+                invoker.chat('Usage: !' + botName + ' addintroduced <name>');
+                return;
+            }
+            addPlayer(rest, 'introduced', ev);
             return;
         }
 
@@ -638,7 +647,7 @@ registerPlugin({
     }
 
     // ===== ROSTER OPERATIONS =====
-    function handleAddPlayer(name, ev) {
+    function addPlayer(name, introStatus, ev) {
         var invoker = ev.client;
         var existing = findPlayer(name);
         if (existing) {
@@ -648,7 +657,7 @@ registerPlugin({
 
         var player = {
             name: name,
-            introStatus: 'pending',
+            introStatus: introStatus,
             rank: '',
             notes: [],
             createdAt: new Date().toISOString()
@@ -689,9 +698,9 @@ registerPlugin({
         if (persistenceInitialized) {
             saveData();
         }
-        invoker.chat('[RosterManager] Added ' + name + '. Introduction status: pending.' +
-            (assigned ? ' Player is online — assigned ' + DEFAULT_RANK + ' + membership groups.' : ''));
-        logMessage('Player added: ' + name + ' by ' + invoker.name(), 3);
+        invoker.chat('[RosterManager] Added ' + name + '. Introduction status: ' + introStatus + '.' +
+            (assigned ? ' Player is online — assigned ' + (player.rank || DEFAULT_RANK) + ' + membership groups.' : ''));
+        logMessage('Player added: ' + name + ' (' + introStatus + ') by ' + invoker.name(), 3);
     }
 
     function handleIntroduced(name, ev) {
@@ -983,6 +992,7 @@ registerPlugin({
         var helpMsg = '[RosterManager] COMMANDS:\n' +
             p + ' help - Show this help message\n' +
             p + ' add <name> - Add player; auto-assigns groups if online (leadership)\n' +
+            p + ' addintroduced <name> - Same as add, but marks them introduced (leadership)\n' +
             p + ' introduced <name> - Mark introduced (leadership)\n' +
             p + ' pending - Players awaiting intro (leadership)\n' +
             p + ' status - Show full roster (leadership)\n' +
