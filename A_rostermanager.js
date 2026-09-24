@@ -396,6 +396,23 @@ registerPlugin({
         return groupId ? [groupId] : [];
     }
 
+    // Every server group ID a rank maps to. Sweeping ALL of these (instead of
+    // only the stored rank's group) is what actually clears old ranks: the
+    // stored rank can be empty or stale when the group was granted manually
+    // or before the rank field was recorded.
+    function allRankGroupIds() {
+        var ids = [];
+        for (var rankName in ranks) {
+            if (ranks.hasOwnProperty(rankName)) {
+                var id = String(ranks[rankName]);
+                if (ids.indexOf(id) === -1) {
+                    ids.push(id);
+                }
+            }
+        }
+        return ids;
+    }
+
     function isRankName(name) {
         return ranks.hasOwnProperty(name);
     }
@@ -667,6 +684,19 @@ registerPlugin({
             invoker.chat('[RosterManager] Player not found: ' + name);
             return;
         }
+
+        // Strip membership (GoudGraaier) and any rank server group while the
+        // player is online. Offline players keep their groups — the next
+        // assign/rankup will not apply, so leadership strips manually or
+        // re-adds and removes them while online.
+        var stripped = false;
+        var client = onlineClientByName(player.name);
+        if (client) {
+            removeFromServerGroups(client, membershipGroupIds);
+            removeFromServerGroups(client, allRankGroupIds());
+            stripped = true;
+        }
+
         for (var i = 0; i < players.length; i++) {
             if (players[i] === player) {
                 players.splice(i, 1);
@@ -676,7 +706,8 @@ registerPlugin({
         if (persistenceInitialized) {
             saveData();
         }
-        invoker.chat('[RosterManager] Removed ' + player.name + ' from the roster.');
+        invoker.chat('[RosterManager] Removed ' + player.name + ' from the roster.' +
+            (stripped ? ' Server groups stripped.' : ' WARNING: not online — TeamSpeak groups NOT stripped; remove them manually or remove them while online next time.'));
     }
 
     function handleAssign(name, ev) {
@@ -766,15 +797,17 @@ registerPlugin({
             return;
         }
 
-        var oldRankGroups = rankGroupsOf(player);
-        removeFromServerGroups(client, oldRankGroups);
+        // Remove ALL configured rank groups, not just the stored rank's group:
+        // the stored rank may be empty or stale (group granted manually), and
+        // TS3 shows the old rank otherwise.
+        removeFromServerGroups(client, allRankGroupIds());
         player.rank = rankName;
         addToServerGroups(client, [ranks[rankName]]);
         if (persistenceInitialized) {
             saveData();
         }
 
-        invoker.chat('[RosterManager] ' + player.name + ' rankup: ' + (oldRankGroups.length ? 'old rank removed, ' : '') + 'now ' + rankName + '.');
+        invoker.chat('[RosterManager] ' + player.name + ' rankup: old rank(s) removed, now ' + rankName + '.');
     }
 
     function handleMatch(partial, ev) {
