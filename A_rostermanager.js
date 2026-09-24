@@ -467,6 +467,19 @@ registerPlugin({
             return;
         }
         var name = client.name();
+        var rankIds = allRankGroupIds();
+        var hasRankGroup = false;
+        for (var r = 0; r < rankIds.length && !hasRankGroup; r++) {
+            hasRankGroup = isMemberOfOne(client, [rankIds[r]]);
+        }
+
+        // Membership-only (rankless) members get the default rank on connect.
+        var defaultRankId = ranks[DEFAULT_RANK];
+        if (!hasRankGroup && defaultRankId && isMemberOfOne(client, membershipGroupIds)) {
+            addToServerGroups(client, [defaultRankId]);
+            logMessage('Assigned default rank ' + DEFAULT_RANK + ' to rankless member ' + name + ' on connect.', 3);
+        }
+
         // Exact registration check only — a prefix hit ("John" vs "John Smith")
         // is still a different player and must be reported.
         var registered = false;
@@ -476,16 +489,7 @@ registerPlugin({
                 break;
             }
         }
-        if (registered) {
-            return;
-        }
-
-        var rankIds = allRankGroupIds();
-        var hasRankGroup = false;
-        for (var r = 0; r < rankIds.length && !hasRankGroup; r++) {
-            hasRankGroup = isMemberOfOne(client, [rankIds[r]]);
-        }
-        if (!hasRankGroup) {
+        if (registered || !hasRankGroup) {
             return;
         }
 
