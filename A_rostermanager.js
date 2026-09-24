@@ -43,8 +43,8 @@ registerPlugin({
         return String(value);
     }
 
-    // Ranks are managed with commands (!roster rank add/remove/list) and kept
-    // in the store — no JSON config needed. Seeded once on first start.
+    // Ranks are fixed (seeded on first start, listed with !roster ranks) —
+    // no add/remove commands, none are expected to be needed.
     var DEFAULT_RANKS = { Matroos: 25, Korporaal: 26, Sergeant: 30, Majoor: 31, Admiraal: 27, Founder: 28 };
 
     function loadRanks() {
@@ -86,7 +86,6 @@ registerPlugin({
     var players = [];        // roster records
     var messages = [];       // taverne messages (oldest -> newest)
     var noteIdCounter = 0;   // global sequential note IDs
-    var pendingTaverne = {}; // name -> true while the bot awaits a message
     var persistenceInitialized = false;
     var store = null;
 
@@ -551,39 +550,8 @@ registerPlugin({
             return;
         }
 
-        if (subCommand === 'rank') {
-            var rankAction = restParts[0] ? restParts[0].toLowerCase() : '';
-            if (rankAction === 'add') {
-                if (restParts.length < 3) {
-                    invoker.chat('Usage: !' + botName + ' rank add <name> <serverGroupId>');
-                    return;
-                }
-                handleRankAdd(restParts[1], restParts[2], ev);
-                return;
-            }
-            if (rankAction === 'remove') {
-                if (restParts.length < 2) {
-                    invoker.chat('Usage: !' + botName + ' rank remove <name>');
-                    return;
-                }
-                handleRankRemove(restParts[1], ev);
-                return;
-            }
-            if (rankAction === 'list' || rankAction === '') {
-                displayRankList(ev);
-                return;
-            }
-            invoker.chat('Usage: !' + botName + ' rank add <name> <serverGroupId> | rank remove <name> | rank list');
-            return;
-        }
-
-        if (subCommand === 'ranks') {
+        if (subCommand === 'ranks' || subCommand === 'rank') {
             displayRankList(ev);
-            return;
-        }
-
-        if (subCommand === 'groups') {
-            displayServerGroups(ev);
             return;
         }
 
@@ -765,102 +733,17 @@ registerPlugin({
         return null;
     }
 
-    // ===== RANK CONFIG OPERATIONS =====
-    function handleRankAdd(rankName, groupId, ev) {
-        var invoker = ev.client;
-        var name = rankName.trim();
-        if (!name) {
-            invoker.chat('Usage: !' + botName + ' rank add <name> <serverGroupId>');
-            return;
-        }
-        var id = String(groupId || '').trim();
-        if (!/^\d+$/.test(id)) {
-            invoker.chat('[RosterManager] Server group ID must be a number — use !' + botName + ' groups to list them');
-            return;
-        }
-        for (var existing in ranks) {
-            if (ranks.hasOwnProperty(existing)) {
-                if (equalsIgnoreCase(existing, name)) {
-                    invoker.chat('[RosterManager] Rank already exists: ' + existing + ' (group ' + ranks[existing] + ')');
-                    return;
-                }
-                if (String(ranks[existing]) === id) {
-                    invoker.chat('[RosterManager] Server group ' + id + ' is already used by rank ' + existing);
-                    return;
-                }
-            }
-        }
-        var group = null;
-        try {
-            group = backend.getServerGroupByID(id);
-        } catch (e) {
-            logMessage('getServerGroupByID failed: ' + e.message, 2);
-        }
-        if (!group) {
-            invoker.chat('[RosterManager] No server group ' + id + ' on this server — use !' + botName + ' groups to list them');
-            return;
-        }
-
-        ranks[name] = id;
-        saveRanks();
-        invoker.chat('[RosterManager] Rank added: ' + name + ' = server group ' + id + ' (' + group.name() + ').');
-    }
-
-    function handleRankRemove(rankName, ev) {
-        var invoker = ev.client;
-        var target = null;
-        for (var existing in ranks) {
-            if (ranks.hasOwnProperty(existing) && equalsIgnoreCase(existing, rankName)) {
-                target = existing;
-                break;
-            }
-        }
-        if (!target) {
-            invoker.chat('[RosterManager] Rank not found: ' + rankName + ' — use !' + botName + ' rank list');
-            return;
-        }
-        var holders = 0;
-        for (var i = 0; i < players.length; i++) {
-            if (equalsIgnoreCase(players[i].rank, target)) {
-                holders++;
-            }
-        }
-        delete ranks[target];
-        saveRanks();
-        invoker.chat('[RosterManager] Rank removed: ' + target + (holders ? ' — note: ' + holders + ' player(s) still carry this rank; rankup will not remove its group automatically anymore.' : ''));
-    }
-
     function displayRankList(ev) {
         var invoker = ev.client;
         var names = Object.keys(ranks);
         if (!names.length) {
-            invoker.chat('[RosterManager] No ranks configured — add one with !' + botName + ' rank add <name> <serverGroupId>');
+            invoker.chat('[RosterManager] No ranks configured');
             return;
         }
         var msg = '[RosterManager] RANKS (' + names.length + '):\n';
         for (var i = 0; i < names.length; i++) {
             msg += ' - ' + names[i] + ' = server group ' + ranks[names[i]] + '\n';
         }
-        invoker.chat(msg);
-    }
-
-    function displayServerGroups(ev) {
-        var invoker = ev.client;
-        var groups = [];
-        try {
-            groups = backend.getServerGroups() || [];
-        } catch (e) {
-            logMessage('getServerGroups failed: ' + e.message, 2);
-        }
-        if (!groups.length) {
-            invoker.chat('[RosterManager] Could not list server groups');
-            return;
-        }
-        var msg = '[RosterManager] SERVER GROUPS (id: name):\n';
-        for (var i = 0; i < groups.length; i++) {
-            msg += ' ' + groups[i].id() + ': ' + groups[i].name() + '\n';
-        }
-        msg += 'Add a rank with !' + botName + ' rank add <name> <id>';
         invoker.chat(msg);
     }
 
@@ -1040,20 +923,18 @@ registerPlugin({
             p + ' assign <name> - Assign server groups (player must be online)\n' +
             p + ' rankup <name> <rank> - Give a new rank (player must be online)\n' +
             p + ' match <partial> - Match closest online client\n' +
-            p + ' groups - List server group IDs for rank setup\n' +
-            p + ' rank add <name> <serverGroupId> - Add a rank (leadership)\n' +
-            p + ' rank remove <name> - Remove a rank (leadership)\n' +
-            p + ' rank list - Show configured ranks (leadership)\n' +
+            p + ' ranks - Show configured ranks\n' +
             p + ' note add <name> <text> - Append a note (leadership)\n' +
             p + ' notes <name> - List notes with IDs (leadership)\n' +
             p + ' note delete <id> - Delete a note by ID (leadership)\n' +
-            t + ' - Post to the taverne (bot prompts for your message)\n' +
-            t + ' cancel - Cancel your taverne post\n' +
+            t + ' <message> - Post a message to the taverne\n' +
+            t + ' help - Taverne help\n' +
             t + ' clear - Clear all taverne messages (leadership)';
         invoker.chat(helpMsg);
     }
 
     // ===== TAVERNE (MESSAGEBOARD) =====
+    // Single-stage: !taverne <message> posts directly.
     function handleTaverneCommand(args, ev) {
         var invoker = ev.client;
 
@@ -1064,13 +945,8 @@ registerPlugin({
 
         args = String(args || '').trim();
 
-        if (equalsIgnoreCase(args, 'cancel')) {
-            if (pendingTaverne[invoker.name()]) {
-                delete pendingTaverne[invoker.name()];
-                invoker.chat('[RosterManager] Taverne post cancelled.');
-            } else {
-                invoker.chat('[RosterManager] Nothing to cancel.');
-            }
+        if (equalsIgnoreCase(args, 'help')) {
+            displayTaverneHelp(ev);
             return;
         }
 
@@ -1085,14 +961,12 @@ registerPlugin({
                 saveData();
             }
             updateTaverneDescription();
-            invoker.chat('[RosterManager] Taverne cleared (' + count + ' messages removed).');
+            invoker.chat('[RosterManager] Taverne cleared (' + (count === 1 ? '1 message' : count + ' messages') + ' removed).');
             return;
         }
 
         if (!args) {
-            // Multi-stage: start the bot prompt; the player's next DM is the message.
-            pendingTaverne[invoker.name()] = true;
-            invoker.chat('[RosterManager] What would you like to post? Type your message or !' + taverneName + ' cancel to abort.');
+            displayTaverneHelp(ev);
             return;
         }
 
@@ -1100,8 +974,16 @@ registerPlugin({
         postTaverneMessage(args, invoker);
     }
 
+    function displayTaverneHelp(ev) {
+        var invoker = ev.client;
+        var t = '!' + taverneName;
+        invoker.chat('[RosterManager] TAVERNE COMMANDS:\n' +
+            t + ' <message> - Post a message to the taverne\n' +
+            t + ' clear - Clear all taverne messages (leadership)\n' +
+            t + ' help - Show this help message');
+    }
+
     function postTaverneMessage(text, invoker) {
-        delete pendingTaverne[invoker.name()];
         var entry = {
             text: text,
             postedBy: invoker.name(),
@@ -1149,25 +1031,6 @@ registerPlugin({
             logMessage('ERROR updating taverne channel description: ' + e.message, 1);
         }
     }
-
-    // Free-form taverne input: the player's next private message is the post.
-    event.on('chat', function(ev) {
-        if (ev.client.isSelf()) {
-            return;
-        }
-        if (ev.mode !== undefined && ev.mode !== 1) {
-            return; // only private messages continue the prompt
-        }
-        var name = ev.client.name();
-        if (!pendingTaverne[name]) {
-            return;
-        }
-        var text = String(ev.text || '').trim();
-        if (!text || text.indexOf('!') === 0) {
-            return; // ignore commands and empty lines
-        }
-        postTaverneMessage(text, ev.client);
-    });
 
     // ===== UTILITY FUNCTIONS =====
     function formatDate(iso) {
