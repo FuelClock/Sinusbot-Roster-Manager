@@ -15,7 +15,6 @@ registerPlugin({
         { name: 'TAVERNE_NAME', title: 'Taverne Command Name', type: 'string', default: 'taverne' },
         { name: 'LEADERSHIP_GROUP', title: 'Server Group ID (leadership)', type: 'string', default: '17' },
         { name: 'MEMBERSHIP_GROUPS', title: 'Membership server group IDs (comma-separated, assigned by assign)', type: 'string', default: '23' },
-        { name: 'RANKS', title: 'Ranks as JSON (rank name -> server group ID, lowest to highest)', type: 'string', default: '{"Matroos":25,"Korporaal":26,"Sergeant":30,"Majoor":31,"Admiraal":27,"Founder":28}' },
         { name: 'MESSAGEBOARD_ENABLED', title: 'Enable taverne messageboard', type: 'select', options: ['enabled', 'disabled'], default: 'enabled' },
         { name: 'MESSAGEBOARD_CHANNEL_ID', title: 'Channel for taverne messages (description)', type: 'channel' },
         { name: 'MAX_SHOWN_MESSAGES', title: 'Max taverne messages shown (newest at top)', type: 'number', default: 50 },
@@ -44,27 +43,44 @@ registerPlugin({
         return String(value);
     }
 
-    function parseRanks(raw) {
-        var ranks = {};
-        var source = raw;
-        if (typeof source === 'string') {
+    // Ranks are managed with commands (!roster rank add/remove/list) and kept
+    // in the store — no JSON config needed. Seeded once on first start.
+    var DEFAULT_RANKS = { Matroos: 25, Korporaal: 26, Sergeant: 30, Majoor: 31, Admiraal: 27, Founder: 28 };
+
+    function loadRanks() {
+        var raw = store ? store.get('rosterRanks') : null;
+        if (raw) {
             try {
-                source = JSON.parse(String(raw || '{}'));
-            } catch (e) {
-                logMessage('ERROR parsing RANKS config JSON: ' + e.message, 1);
-                source = {};
-            }
-        }
-        if (source && typeof source === 'object') {
-            for (var key in source) {
-                if (source.hasOwnProperty(key)) {
-                    ranks[key] = source[key];
+                var parsed = JSON.parse(raw);
+                if (parsed && typeof parsed === 'object') {
+                    ranks = parsed;
+                    return;
                 }
+            } catch (e) {
+                logMessage('ERROR parsing stored ranks: ' + e.message, 1);
             }
         }
-        return ranks;
+        ranks = {};
+        for (var seed in DEFAULT_RANKS) {
+            if (DEFAULT_RANKS.hasOwnProperty(seed)) {
+                ranks[seed] = DEFAULT_RANKS[seed];
+            }
+        }
+        saveRanks();
+        logMessage('Seeded default ranks (first start): ' + Object.keys(ranks).join(', '), 3);
     }
-    var ranks = parseRanks(config.RANKS);
+
+    function saveRanks() {
+        if (!store) {
+            return;
+        }
+        try {
+            store.set('rosterRanks', JSON.stringify(ranks));
+        } catch (e) {
+            logMessage('ERROR saving ranks: ' + e.message, 1);
+        }
+    }
+    var ranks = {};
 
     // ===== PERSISTENCE =====
     var players = [];        // roster records
@@ -240,9 +256,8 @@ registerPlugin({
     event.on('load', function(ev) {
         logMessage('Roster Manager v0.1.0 loaded');
         logMessage('Configuration - BotName: ' + botName + ', LeadershipGroup: ' + leadershipGroupId +
-            ', MembershipGroups: [' + membershipGroupIds.join(',') + '] (rank groups: ' +
-            Object.keys(ranks).length + '), Taverne: ' + (messageboardEnabled ? 'enabled' : 'disabled') +
-            ' channel=' + messageboardChannelId);
+            ', MembershipGroups: [' + membershipGroupIds.join(',') + '], Taverne: ' +
+            (messageboardEnabled ? 'enabled' : 'disabled') + ' channel=' + messageboardChannelId);
 
         if (backend.isConnected()) {
             initialize();
@@ -255,12 +270,14 @@ registerPlugin({
 
     function initialize() {
         logMessage('Initializing roster manager system...');
+        loadRanks();
         loadPersistedData();
         persistenceInitialized = true;
         if (messageboardEnabled) {
             updateTaverneDescription();
         }
-        logMessage('Initialization complete. Loaded ' + players.length + ' players, ' + messages.length + ' taverne messages');
+        logMessage('Initialization complete. Loaded ' + players.length + ' players, ' +
+            Object.keys(ranks).length + ' ranks, ' + messages.length + ' taverne messages');
     }
 
     // ===== PERSISTENCE HELPERS =====
@@ -534,6 +551,42 @@ registerPlugin({
             return;
         }
 
+        if (subCommand === 'rank') {
+            var rankAction = restParts[0] ? restParts[0].toLowerCase() : '';
+            if (rankAction === 'add') {
+                if (restParts.length < 3) {
+                    invoker.chat('Usage: !' + botName + ' rank add <name> <serverGroupId>');
+                    return;
+                }
+                handleRankAdd(restParts[1], restParts[2], ev);
+                return;
+            }
+            if (rankAction === 'remove') {
+                if (restParts.length < 2) {
+                    invoker.chat('Usage: !' + botName + ' rank remove <name>');
+                    return;
+                }
+                handleRankRemove(restParts[1], ev);
+                return;
+            }
+            if (rankAction === 'list' || rankAction === '') {
+                displayRankList(ev);
+                return;
+            }
+            invoker.chat('Usage: !' + botName + ' rank add <name> <serverGroupId> | rank remove <name> | rank list');
+            return;
+        }
+
+        if (subCommand === 'ranks') {
+            displayRankList(ev);
+            return;
+        }
+
+        if (subCommand === 'groups') {
+            displayServerGroups(ev);
+            return;
+        }
+
         if (subCommand === 'rankup') {
             if (restParts.length < 2) {
                 invoker.chat('Usage: !' + botName + ' rankup <name> <rank>');
@@ -712,6 +765,105 @@ registerPlugin({
         return null;
     }
 
+    // ===== RANK CONFIG OPERATIONS =====
+    function handleRankAdd(rankName, groupId, ev) {
+        var invoker = ev.client;
+        var name = rankName.trim();
+        if (!name) {
+            invoker.chat('Usage: !' + botName + ' rank add <name> <serverGroupId>');
+            return;
+        }
+        var id = String(groupId || '').trim();
+        if (!/^\d+$/.test(id)) {
+            invoker.chat('[RosterManager] Server group ID must be a number — use !' + botName + ' groups to list them');
+            return;
+        }
+        for (var existing in ranks) {
+            if (ranks.hasOwnProperty(existing)) {
+                if (equalsIgnoreCase(existing, name)) {
+                    invoker.chat('[RosterManager] Rank already exists: ' + existing + ' (group ' + ranks[existing] + ')');
+                    return;
+                }
+                if (String(ranks[existing]) === id) {
+                    invoker.chat('[RosterManager] Server group ' + id + ' is already used by rank ' + existing);
+                    return;
+                }
+            }
+        }
+        var group = null;
+        try {
+            group = backend.getServerGroupByID(id);
+        } catch (e) {
+            logMessage('getServerGroupByID failed: ' + e.message, 2);
+        }
+        if (!group) {
+            invoker.chat('[RosterManager] No server group ' + id + ' on this server — use !' + botName + ' groups to list them');
+            return;
+        }
+
+        ranks[name] = id;
+        saveRanks();
+        invoker.chat('[RosterManager] Rank added: ' + name + ' = server group ' + id + ' (' + group.name() + ').');
+    }
+
+    function handleRankRemove(rankName, ev) {
+        var invoker = ev.client;
+        var target = null;
+        for (var existing in ranks) {
+            if (ranks.hasOwnProperty(existing) && equalsIgnoreCase(existing, rankName)) {
+                target = existing;
+                break;
+            }
+        }
+        if (!target) {
+            invoker.chat('[RosterManager] Rank not found: ' + rankName + ' — use !' + botName + ' rank list');
+            return;
+        }
+        var holders = 0;
+        for (var i = 0; i < players.length; i++) {
+            if (equalsIgnoreCase(players[i].rank, target)) {
+                holders++;
+            }
+        }
+        delete ranks[target];
+        saveRanks();
+        invoker.chat('[RosterManager] Rank removed: ' + target + (holders ? ' — note: ' + holders + ' player(s) still carry this rank; rankup will not remove its group automatically anymore.' : ''));
+    }
+
+    function displayRankList(ev) {
+        var invoker = ev.client;
+        var names = Object.keys(ranks);
+        if (!names.length) {
+            invoker.chat('[RosterManager] No ranks configured — add one with !' + botName + ' rank add <name> <serverGroupId>');
+            return;
+        }
+        var msg = '[RosterManager] RANKS (' + names.length + '):\n';
+        for (var i = 0; i < names.length; i++) {
+            msg += ' - ' + names[i] + ' = server group ' + ranks[names[i]] + '\n';
+        }
+        invoker.chat(msg);
+    }
+
+    function displayServerGroups(ev) {
+        var invoker = ev.client;
+        var groups = [];
+        try {
+            groups = backend.getServerGroups() || [];
+        } catch (e) {
+            logMessage('getServerGroups failed: ' + e.message, 2);
+        }
+        if (!groups.length) {
+            invoker.chat('[RosterManager] Could not list server groups');
+            return;
+        }
+        var msg = '[RosterManager] SERVER GROUPS (id: name):\n';
+        for (var i = 0; i < groups.length; i++) {
+            msg += ' ' + groups[i].id() + ': ' + groups[i].name() + '\n';
+        }
+        msg += 'Add a rank with !' + botName + ' rank add <name> <id>';
+        invoker.chat(msg);
+    }
+
     function handleRankup(name, rankName, ev) {
         var invoker = ev.client;
         var player = findPlayer(name);
@@ -888,6 +1040,10 @@ registerPlugin({
             p + ' assign <name> - Assign server groups (player must be online)\n' +
             p + ' rankup <name> <rank> - Give a new rank (player must be online)\n' +
             p + ' match <partial> - Match closest online client\n' +
+            p + ' groups - List server group IDs for rank setup\n' +
+            p + ' rank add <name> <serverGroupId> - Add a rank (leadership)\n' +
+            p + ' rank remove <name> - Remove a rank (leadership)\n' +
+            p + ' rank list - Show configured ranks (leadership)\n' +
             p + ' note add <name> <text> - Append a note (leadership)\n' +
             p + ' notes <name> - List notes with IDs (leadership)\n' +
             p + ' note delete <id> - Delete a note by ID (leadership)\n' +
