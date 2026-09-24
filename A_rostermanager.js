@@ -461,12 +461,30 @@ registerPlugin({
     // When someone with a rank server group connects but is not on the roster,
     // poke the online leadership (NOTIFY_GROUPS, e.g. Admiraal/Founder) so
     // they complete the roster with !roster add.
+    //
+    // IMPORTANT: at the instant of clientJoin the client's server group list
+    // is often NOT populated yet (TS3/SinusBot timing), so the check runs on
+    // a delay against a freshly resolved client. Rankless members get the
+    // default rank during the same delayed check.
+    var JOIN_CHECK_DELAY_MS = Math.max(0, parseFloat(config.JOIN_CHECK_DELAY, 10) * 1000) || 3000;
     event.on('clientJoin', function(ev) {
         var client = ev.client;
         if (!client || client.isSelf()) {
             return;
         }
         var name = client.name();
+        setTimeout(function() {
+            checkConnectedClient(name);
+        }, JOIN_CHECK_DELAY_MS);
+    });
+
+    function checkConnectedClient(name) {
+        // Re-resolve the client from the live list — the join snapshot may
+        // have empty/stale server group data. If they left again, skip.
+        var client = onlineClientByName(name);
+        if (!client) {
+            return;
+        }
         var rankIds = allRankGroupIds();
         var hasRankGroup = false;
         for (var r = 0; r < rankIds.length && !hasRankGroup; r++) {
@@ -512,7 +530,7 @@ registerPlugin({
             }
         }
         logMessage('Unregistered rank holder ' + name + ' connected — notified ' + poked + ' leadership client(s).', 3);
-    });
+    }
 
     // ===== COMMAND HANDLING =====
     event.on('chat', function(ev) {
