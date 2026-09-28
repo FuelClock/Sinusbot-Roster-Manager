@@ -15,6 +15,7 @@ registerPlugin({
         { name: 'TAVERNE_NAME', title: 'Taverne Command Name', type: 'string', default: 'taverne' },
         { name: 'ADDI_NAME', title: 'Add-Introduced Command Name (used as !<name>)', type: 'string', default: 'addi' },
         { name: 'LEADERSHIP_GROUP', title: 'Server Group ID (leadership)', type: 'string', default: '17' },
+        { name: 'TAVERNE_POSTING_GROUP', title: 'Server Group ID (who can post to taverne)', type: 'string', default: '' },
         { name: 'NOTIFY_GROUPS', title: 'Server group IDs poked about unregistered rank holders (comma-separated)', type: 'string', default: '27,28' },
         { name: 'MEMBERSHIP_GROUPS', title: 'Membership server group IDs (comma-separated, assigned by assign)', type: 'string', default: '23' },
         { name: 'MESSAGEBOARD_ENABLED', title: 'Enable taverne messageboard', type: 'select', options: ['enabled', 'disabled'], default: 'enabled' },
@@ -37,6 +38,7 @@ registerPlugin({
     var taverneName = String(config.TAVERNE_NAME || 'taverne');
     var addiName = String(config.ADDI_NAME || 'addi');
     var leadershipGroupId = String(config.LEADERSHIP_GROUP || '17');
+    var tavernePostingGroupId = String(config.TAVERNE_POSTING_GROUP || '');
     var notifyGroupIds = String(config.NOTIFY_GROUPS || '27,28').split(',').map(function(s) { return String(s).trim(); }).filter(Boolean);
     var membershipGroupIds = String(config.MEMBERSHIP_GROUPS || '23').split(',').map(function(s) { return String(s).trim(); }).filter(Boolean);
     var messageboardEnabled = !(config.MESSAGEBOARD_ENABLED === 'disabled' || config.MESSAGEBOARD_ENABLED === 1);
@@ -213,6 +215,11 @@ registerPlugin({
 
     function isLeadership(invoker) {
         return isMemberOfOne(invoker, [leadershipGroupId]);
+    }
+
+    function isTavernePostingAllowed(invoker) {
+        if (!tavernePostingGroupId) return true; // no posting group configured = anyone can post
+        return isMemberOfOne(invoker, [tavernePostingGroupId]);
     }
 
     function addToServerGroups(client, groups) {
@@ -1319,6 +1326,10 @@ registerPlugin({
         }
 
         // Direct post: !taverne <message>
+        if (!isTavernePostingAllowed(invoker)) {
+            invoker.chat('[RosterManager] Permission denied — you need to be in the taverne posting group to post messages.');
+            return;
+        }
         postTaverneMessage(args, invoker);
     }
 
