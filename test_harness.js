@@ -474,6 +474,20 @@ env.fireChat(member, '!taverne msg four');
 check('4 messages stored but max 3 shown (one hidden)', env.taverneDesc.indexOf('msg one') === -1 && env.taverneDesc.indexOf('msg four') !== -1 && env.taverneDesc.indexOf('older messages') !== -1, env.taverneDesc);
 check('newest at top (four above two)', env.taverneDesc.indexOf('msg four') < env.taverneDesc.indexOf('msg two'));
 
+// --- taverne posting permission (default group 23) ---
+var goudPoster = env.makeClient('Goud Poster', ['23']);   // membership group -> may post
+var goudRankPoster = env.makeClient('Goud Rank Poster', ['23', '26']);
+var nonMemberPoster = env.makeClient('Non Member', ['25']); // rank but NO membership
+var preDeniedDesc = env.taverneDesc;
+env.fireChat(goudPoster, '!taverne member posts');
+check('GoudGraaier member may post (default posting group 23)', /Message posted/.test(lastMsg()));
+env.fireChat(goudRankPoster, '!taverne member with rank posts');
+check('GoudGraaier member with a rank may post', /Message posted/.test(lastMsg()));
+env.fireChat(nonMemberPoster, '!taverne outsider posts');
+check('non-member (no GoudGraaier) denied posting', /Permission denied/.test(lastMsg()));
+check('denied post did not reach the board', env.taverneDesc.indexOf('outsider posts') === -1, env.taverneDesc);
+check('denied post left the board unchanged', env.taverneDesc.indexOf('member with rank posts') !== -1);
+
 // --- taverne disabled via config ---
 console.log('=== taverne disabled ===');
 var envD = makeEnv({ oklib: true, config: { BOT_NAME: 'member', MESSAGEBOARD_ENABLED: 'disabled', MESSAGEBOARD_CHANNEL_ID: '' } });
